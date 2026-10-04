@@ -4,7 +4,17 @@ const express   = require('express');
 
 const TARGET = 'wss://finder.kickerstore.gg/v2/ws?diag=d94328ee-3114-4c5f-b430-0816a9dccfb4';
 
+// ---- OPTIONAL: a first message to send after open, if the server wants one ----
+// Examples to try:
+//   '{"type":"subscribe"}'
+//   '{"op":"ping"}'
+//   '{"action":"init"}'
+// Leave null to skip.
+const FIRST_MESSAGE = null;
+// -------------------------------------------------------------------------------
+
 let ws = null, status = 'connecting', logs = [], nextId = 1;
+let pingTimer = null;
 
 function push(dir, data) {
   logs.push({ id: nextId++, t: Math.floor(Date.now() / 1000), dir, data: String(data) });
@@ -23,15 +33,41 @@ function connect() {
     },
   });
 
-  ws.on('open',    () => { status = 'open'; push('SYS', 'WS OPEN'); });
+  ws.on('open', () => {
+    status = 'open';
+    push('SYS', 'WS OPEN');
+
+    // Send a keepalive ping IMMEDIATELY on open
+    ws.ping(Buffer.from(String(Date.now())));
+    push('SYS', 'PING (immediate)');
+
+    // ...and every 2 seconds after
+    clearInterval(pingTimer);
+    pingTimer = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.ping(Buffer.from(String(Date.now())));
+        push('SYS', 'PING');
+      }
+    }, 2000);
+
+    // Optional first app-level message
+    if (FIRST_MESSAGE) {
+      ws.send(FIRST_MESSAGE);
+      push('OUT', FIRST_MESSAGE);
+    }
+  });
+
   ws.on('message', (d, isBin) => push('IN', isBin ? '<bin>' : d.toString()));
-  ws.on('ping',    d => { push('SYS', 'PING'); ws.pong(d); });
-  ws.on('pong',    () => push('SYS', 'PONG'));
-  ws.on('close',   (code, reason) => {
+  ws.on('ping',    d => { push('SYS', 'IN PING'); ws.pong(d); });
+  ws.on('pong',    d => push('SYS', 'IN PONG'));
+
+  ws.on('close', (code, reason) => {
+    clearInterval(pingTimer);
     status = 'closed';
     push('SYS', `CLOSE code=${code} reason=${reason}`);
     setTimeout(connect, 2000);
   });
+
   ws.on('error', e => push('ERR', e.message));
   ws.on('unexpected-response', (req, res) => {
     push('ERR', `non-101: ${res.statusCode} ${res.statusMessage}`);
@@ -56,6 +92,5 @@ app.post('/send', (req, res) => {
   res.send('ok');
 });
 
-// Render requires binding to 0.0.0.0 and using its PORT env var
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => console.log('bridge on port ' + PORT));
