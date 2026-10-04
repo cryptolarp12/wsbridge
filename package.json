@@ -1,0 +1,10 @@
+{
+  "name": "wsbridge",
+  "version": "1.0.0",
+  "main": "bridge.js",
+  "scripts": { "start": "node bridge.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
